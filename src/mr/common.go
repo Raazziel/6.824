@@ -1,30 +1,29 @@
 package mr
+
 type taskStatus int
 
 // task type
-const(
-	Wait int=iota
+const (
+	Wait int = iota
 	Map
 	Reduce
 	Exit
 )
 
 //task status
-const(
-	Notstart taskStatus =iota
+const (
+	Notstart taskStatus = iota
 	Pending
 	Done
 )
 
 //master status
-const(
-	sNotStart int =iota
+const (
+	sNotStart int = iota
 	sMap
 	sReduce
 	sDone
-
 )
-
 
 type Task struct {
 	Tp       int
@@ -40,8 +39,8 @@ type sTask struct {
 	status taskStatus
 }
 
-func (t *sTask)restart() {
-	t.status=Notstart
+func (t *sTask) restart() {
+	t.status = Notstart
 }
 
 type ScheArgs struct {
@@ -49,6 +48,7 @@ type ScheArgs struct {
 }
 
 type ScheReply Task
+
 func newScheReply(t Task) ScheReply {
 	return (ScheReply)(t)
 }
@@ -58,4 +58,3 @@ type ReportDoneArgs Task
 type ReportDoneReply struct {
 	Dummy bool
 }
-
