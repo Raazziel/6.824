@@ -111,6 +111,7 @@ func (rf *Raft) watchdog() {
 		case <-time.After(timeInterval * time.Millisecond):
 			rf.mu.Lock()
 			if !rf.fs.updatedWithHB {
+				fmt.Printf("%d:%d becomes candidate due to timeout\n",rf.me,rf.term)
 				rf.term = rf.term + 1
 				rf.roleChange(candidate)
 				rf.mu.Unlock()
@@ -128,19 +129,26 @@ func (rf *Raft) watchdog() {
 func (rf *Raft) tryAppendEntry(who, startAt int) {
 	for {
 		if startAt != rf.term || rf.role != leader {
+			fmt.Printf("%d:%d quit leader due to status change1\n",rf.me,rf.term)
 			return
 		}
 		args := &AppendEntryArgs{startAt, rf.me}
 		reply := &AppendEntryReply{}
 		if rf.peers[who].Call("Raft.AppendEntry", args, reply) {
+			fmt.Printf("%d:%d get a vote reply from %d:%d:%v\n",rf.me,startAt,who,reply.Term,reply.Ok)
 			//case 1,reply bigger term
 			if !reply.Ok && reply.Term > rf.term {
 				rf.mu.Lock()
+				if startAt != rf.term || rf.role != leader {
+					fmt.Printf("%d:%d quit leader due to status change2\n",rf.me,rf.term)
+					return
+				}
 				rf.term = reply.Term
 				rf.roleChange(follower)
 				rf.mu.Unlock()
 				return
 			}
+			return
 			//case 2,reply smaller term and prelog unmatched
 			//case 3,reply ok
 		}
@@ -162,6 +170,7 @@ func (rf *Raft) broadcast() {
 				go rf.tryAppendEntry(i, rf.term)
 			}
 		case <-rf.ls.done:
+			fmt.Printf("%d:%d quit leader\n",rf.me,rf.term)
 			return
 		}
 	}
@@ -197,7 +206,6 @@ func (rf *Raft) roleChange(to int) {
 		}
 		go rf.watchdog()
 	} else if to == candidate {
-		fmt.Printf("%d becomes a candidate\n",rf.me)
 		rf.cs.done=make(chan struct{})
 		rf.cs.votes=0
 		for i := 0; i < len(rf.peers); i++ {
@@ -205,7 +213,6 @@ func (rf *Raft) roleChange(to int) {
 		}
 		go rf.startVote()
 	} else if to == leader {
-		fmt.Printf("finally we got %d as a leader with term:%d\n",rf.me,rf.term)
 		rf.ls = leaderStatus{
 			done: make(chan struct{}),
 		}
@@ -367,7 +374,9 @@ func (rf *Raft) startVote() {
 			rf.cs.voters[k] = false
 		}
 		rf.startVote()
+		return
 	case <-rf.cs.done:
+		fmt.Printf("%d:%d stops voting\n",rf.me,rf.term)
 		return
 	}
 }
@@ -422,17 +431,18 @@ func (rf *Raft) askSingleVote(who, startAt int) {
 			if startAt != rf.term {
 				return
 			}
-			fmt.Sprintf("%d get a vote reply from %d\n",rf.me,args.ID)
+			fmt.Printf("%d:%d get a vote reply from %d:%d:%v\n",rf.me,startAt,who,reply.Term,reply.Ok)
 			termBigger := reply.Term > rf.term
 			if termBigger {
 				rf.term = args.Term
 				rf.roleChange(follower)
-				fmt.Printf("with bigger term %d from %d,%d becomes a follower\n",reply.Term,args.ID,rf.me)
+				fmt.Printf("with bigger term %d from %d,%d becomes a follower\n",reply.Term,who,rf.me)
 				return
 			}
 			if reply.Ok && !rf.cs.voters[who] {
 				rf.cs.votes++
 				if rf.cs.votes+1 > len(rf.peers)/2 {
+					fmt.Printf("%d:%d becomes leader with %d vote",rf.me,rf.term,rf.cs.votes)
 					rf.roleChange(leader)
 					return
 				}

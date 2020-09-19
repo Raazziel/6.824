@@ -52,7 +52,7 @@ func TestInitialElection2A(t *testing.T) {
 
 func TestReElection2A(t *testing.T) {
 	servers := 3
-	cfg := make_config(t, servers, false)
+	cfg := make_config(t, servers, true)
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2A): election after network failure")
