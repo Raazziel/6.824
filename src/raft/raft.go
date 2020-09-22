@@ -222,6 +222,7 @@ type AppendEntryReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.Lock("rv lock")
+	defer DPrintf("%d:%d is asked voting for %+v,%+v",rf.me,rf.term,args,reply)
 	defer rf.Unlock()
 	rf.fs.updatedWithHB=true
 	*reply=RequestVoteReply{
@@ -230,16 +231,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if args.Term<rf.term{
 		return
-	}else if args.Term==rf.term && rf.role==follower{
-		if rf.fs.votedTo!=-1 && rf.fs.votedTo!=args.From{
-			return
+	}else if args.Term==rf.term {
+		if rf.role==follower{
+			if rf.fs.votedTo!=-1 && rf.fs.votedTo!=args.From{
+				return
+			}
+			rf.fs.votedTo=args.From
+			reply.Granted=true
 		}
-		rf.fs.votedTo=args.From
-		reply.Granted=true
+		return
 	}else{
+		DPrintf("%d:%d increase term with %d:%d\n",rf.me,rf.term,args.From,args.Term)
 		rf.term=args.Term
-		rf.fs.votedTo=args.From
 		rf.changeRole(follower)
+		rf.fs.votedTo=args.From
 		reply.Granted=true
 	}
 	reply.Term=rf.term
@@ -296,6 +301,7 @@ func (rf *Raft)requestSingleVote(to int,res chan bool){
 			//case2 对方term更大
 			rf.Lock("rsv middle lock")
 			if reply.Term>rf.term{
+				DPrintf("%d:%d increase term with %d:%d\n",rf.me,rf.term,args.From,reply.Term)
 				rf.term=reply.Term
 				rf.changeRole(follower)
 			}
@@ -321,14 +327,16 @@ func (rf *Raft)doRequestVote(){
 			votes++
 			if rf.hasMajority(votes){
 				rf.Lock("become leader lock")
+				DPrintf("%d:%d becomes leader\n",rf.me,rf.term)
 				rf.changeRole(leader)
 				rf.Unlock()
 				return
 			}
 		case <-time.After(time.Duration(ElectionTimeout+rand.Intn(61))*time.Millisecond):
-			//之后重构用atomic实现...
+			//TODO:重构用atomic实现...
 			rf.Lock("term++ lock")
 			rf.term++
+			DPrintf("%d:%d election time out\n",rf.me,rf.term)
 			rf.Unlock()
 			go rf.doRequestVote()
 			return
@@ -348,10 +356,14 @@ func (rf *Raft)AppendEntry(args *AppendEntryArgs,reply *AppendEntryReply){
 	}
 	if args.Term<rf.term{
 		return
-	}else if args.Term==rf.term && rf.role==candidate{
-		reply.Success=true
-		rf.changeRole(follower)
+	}else if args.Term==rf.term {
+		if rf.role==candidate{
+			reply.Success=true
+			rf.changeRole(follower)
+		}
+		return
 	}else{
+		DPrintf("%d:%d increase term with %d:%d\n",rf.me,rf.term,args.From,args.Term)
 		rf.term=args.Term
 		reply.Success=true
 		rf.changeRole(follower)
@@ -371,6 +383,7 @@ func (rf *Raft) appendSingleEntry(to int,res chan bool){
 			}
 			rf.Lock("ase lock")
 			if reply.Term>rf.term{
+				DPrintf("%d:%d increase term with %d:%d\n",rf.me,rf.term,args.From,reply.Term)
 				rf.term=reply.Term
 				rf.changeRole(follower)
 			}
@@ -393,7 +406,7 @@ func (rf *Raft)doAppendEntry(){
 func (rf *Raft)keepAlive(){
 	for{
 		select {
-		case <-time.After(time.Duration(HBInterval+rand.Int()%41)*time.Millisecond):
+		case <-time.After(time.Duration(HBInterval+rand.Intn(41))*time.Millisecond):
 			rf.doAppendEntry()
 		case <-rf.ls.done:
 			return
@@ -404,9 +417,10 @@ func (rf *Raft)keepAlive(){
 func (rf *Raft)isAlive(){
 	for {
 		select {
-		case <-time.After(time.Duration(HBTimeout+rand.Int()%53) * time.Millisecond):
+		case <-time.After(time.Duration(HBTimeout+rand.Intn(53)) * time.Millisecond):
 			rf.Lock("is alive")
 			if !rf.fs.updatedWithHB {
+				DPrintf("%d:%d becomes candidate\n",rf.me,rf.term)
 				rf.term++
 				rf.changeRole(candidate)
 				rf.Unlock()

@@ -43,6 +43,7 @@ func TestInitialElection2A(t *testing.T) {
 	if term1 != term2 {
 		fmt.Printf("%d:%d\n",term1,term2)
 		fmt.Printf("warning: term changed even though there were no failures")
+		t.Fatal("term changed even though there were no failures")
 	}
 
 	// there should still be a leader.
@@ -53,7 +54,7 @@ func TestInitialElection2A(t *testing.T) {
 
 func TestReElection2A(t *testing.T) {
 	servers := 3
-	cfg := make_config(t, servers, false)
+	cfg := make_config(t, servers, true)
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2A): election after network failure")
