@@ -9,7 +9,7 @@ import (
 )
 
 // Debugging
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {
@@ -28,7 +28,7 @@ func (m *DLock) Lock(desc string) {
 	if Debug>0{
 		r := atomic.AddInt32(&m.lid, 2)
 		go func() {
-			time.Sleep(time.Duration(10) * time.Millisecond)
+			time.Sleep(time.Duration(100) * time.Millisecond)
 			if atomic.LoadInt32(&m.lid) == r {
 				fmt.Println("deadlock detected", desc,"+",m.lid)
 			}

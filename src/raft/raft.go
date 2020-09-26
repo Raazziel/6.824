@@ -306,8 +306,17 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
+	rf.Lock("kill you!")
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	switch rf.role {
+	case follower:
+		close(rf.fs.done)
+	case candidate:
+		close(rf.cs.done)
+	case leader:
+		close(rf.ls.done)
+	}
 }
 
 func (rf *Raft) killed() bool {

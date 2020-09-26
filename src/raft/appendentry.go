@@ -75,7 +75,7 @@ func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 			return
 		default:
 			rf.Lock("ase lock1")
-			if rf.role!=leader{
+			if rf.role!=leader||rf.killed(){
 				rf.Unlock()
 				return
 			}

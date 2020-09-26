@@ -76,7 +76,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) requestSingleVote(to int, res chan bool) {
 	rf.Lock("rsv lock")
 	index,term:=rf.getLastIndexTerm()
-	DPrintf("index is %d,term is %d\n",index,term)
 	args := &RequestVoteArgs{rf.term, rf.me,index,term}
 	rf.Unlock()
 	reply := &RequestVoteReply{}
@@ -95,6 +94,9 @@ func (rf *Raft) requestSingleVote(to int, res chan bool) {
 				rf.changeRole(follower)
 			}
 			rf.Unlock()
+			return
+		}
+		if rf.killed(){
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
