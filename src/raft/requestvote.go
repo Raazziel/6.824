@@ -28,7 +28,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.Lock("rv lock")
 	defer rf.Unlock()
 	defer DPrintf("%d:%d is asked voting for %+v,%+v", rf.me, rf.term, args, reply)
-	rf.fs.updatedWithHB = true
 	*reply = RequestVoteReply{
 		Term:    rf.term,
 		Granted: false,
@@ -54,12 +53,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				return
 			}
 			rf.fs.votedTo = args.From
+			rf.fs.updatedWithHB = true
 			reply.Granted = true
 		}
 		return
 	} else {
 		DPrintf("%d:%d increase Term with %d:%d\n", rf.me, rf.term, args.From, args.Term)
 		rf.term = args.Term
+		rf.persist()
 		reply.Term = rf.term
 		rf.changeRole(follower)
 		if !logOK{
@@ -91,6 +92,7 @@ func (rf *Raft) requestSingleVote(to int, res chan bool) {
 			if reply.Term > rf.term {
 				DPrintf("%d:%d increase Term with %d:%d\n", rf.me, rf.term, args.From, reply.Term)
 				rf.term = reply.Term
+				rf.persist()
 				rf.changeRole(follower)
 			}
 			rf.Unlock()
@@ -113,6 +115,7 @@ func (rf *Raft) doRequestVote() {
 		go rf.requestSingleVote(i, res)
 	}
 	for {
+		interval:=ElectionTimeout+rand.Intn(ElectionTimeout)
 		select {
 		case <-res:
 			votes++
@@ -123,10 +126,12 @@ func (rf *Raft) doRequestVote() {
 				rf.Unlock()
 				return
 			}
-		case <-time.After(time.Duration(ElectionTimeout+rand.Intn(61)) * time.Millisecond):
+		case <-time.After(time.Duration(interval) * time.Millisecond):
 			//TODO:重构用atomic实现...
+			DPrintf("%d retry vote after %d ms",rf.me,interval)
 			rf.Lock("Term++ lock")
 			rf.term++
+			rf.persist()
 			DPrintf("%d:%d election time out\n", rf.me, rf.term)
 			rf.Unlock()
 			go rf.doRequestVote()

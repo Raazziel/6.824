@@ -17,6 +17,11 @@ type Persister struct {
 	snapshot  []byte
 }
 
+type PersistedData struct {
+	Term int
+	Logs []Log
+}
+
 func MakePersister() *Persister {
 	return &Persister{}
 }

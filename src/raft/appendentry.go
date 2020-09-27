@@ -19,6 +19,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 	rf.Lock("ae lock")
 	defer DPrintf("%d:%d is asked appending entry %+v,%+v", rf.me, rf.term, args, reply)
 	defer rf.Unlock()
+	defer rf.persist()
 	rf.fs.updatedWithHB = true
 	*reply = AppendEntryReply{
 		Term:    rf.term,
@@ -91,6 +92,7 @@ func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 				if reply.Term > rf.term {
 					DPrintf("%d:%d increase Term with %d:%d\n", rf.me, rf.term, args.From, reply.Term)
 					rf.term = reply.Term
+					rf.persist()
 					rf.changeRole(follower)
 					rf.Unlock()
 					return

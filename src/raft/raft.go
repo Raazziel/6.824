@@ -18,10 +18,14 @@ package raft
 //
 
 import (
+	"bytes"
+	"math/rand"
 	"time"
+	"sync/atomic"
+	"../labrpc"
+	"../labgob"
 )
-import "sync/atomic"
-import "../labrpc"
+
 
 // import "bytes"
 // import "../labgob"
@@ -190,11 +194,36 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+
+	w:=new(bytes.Buffer)
+	e:=labgob.NewEncoder(w)
+	e.Encode(rf.term)
+	e.Encode(len(rf.logs))
+	e.Encode(rf.logs)
+	data:=w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
+func virtualP(data []byte){
+	if len(data)<1||data==nil{
+		return
+	}
+	r:=bytes.NewBuffer(data)
+	d:=labgob.NewDecoder(r)
+	term:=0
+	e:=d.Decode(&term)
+	if e!=nil{
+		panic(e.Error())
+	}
+	lenLogs:=0
+	d.Decode(&lenLogs)
+	logs:=make([]Log,lenLogs)
+	e=d.Decode(&logs)
+	DPrintf("decode result:%d,%d,%+v\n",term,lenLogs,logs)
+}
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
@@ -212,8 +241,40 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	rf.Lock("readPersist")
+	defer rf.Unlock()
+	r:=bytes.NewBuffer(data)
+	d:=labgob.NewDecoder(r)
+	term:=0
+	e:=d.Decode(&term)
+	if e!=nil{
+		panic(e.Error())
+	}
+	lenLogs:=0
+	d.Decode(&lenLogs)
+	logs:=make([]Log,lenLogs)
+	e=d.Decode(&logs)
+	rf.term=term
+	rf.logs=logs[:]
+	DPrintf("readpersist:decode term:%d logs size :%d,%+v\n",term,lenLogs,logs)
+	if e!=nil{
+		panic(e.Error())
+	}
 }
-
+func printP(data []byte){
+	r:=bytes.NewBuffer(data)
+	d:=labgob.NewDecoder(r)
+	term:=0
+	e:=d.Decode(&term)
+	if e!=nil{
+		panic(e.Error())
+	}
+	lenLogs:=0
+	d.Decode(&lenLogs)
+	logs:=make([]Log,lenLogs)
+	e=d.Decode(&logs)
+	DPrintf("printP:decode logs size :%d,%+v\n",len(logs),logs)
+}
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -243,12 +304,15 @@ func (rf *Raft) keepAlive() {
 
 func (rf *Raft) isAlive() {
 	for {
+		interval:=HBTimeout+rand.Intn(61)
+		t:=time.After(time.Duration(interval) * time.Millisecond)
 		select {
-		case <-time.After(time.Duration(HBTimeout) * time.Millisecond):
+		case <-t:
 			rf.Lock("is alive")
 			if !rf.fs.updatedWithHB {
 				DPrintf("%d:%d becomes candidate\n", rf.me, rf.term)
 				rf.term++
+				rf.persist()
 				rf.changeRole(candidate)
 				rf.Unlock()
 				return
@@ -290,6 +354,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Command: command,
 		})
 		DPrintf("%d:%d update log to %d,%+v\n",rf.me,term,len(rf.logs),command)
+		rf.persist()
 	}
 	return index, term, isLeader
 }
@@ -307,8 +372,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	rf.Lock("kill you!")
+	defer rf.Unlock()
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+
 	switch rf.role {
 	case follower:
 		close(rf.fs.done)
@@ -354,8 +421,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.ls.matchIndex=make([]int,rf.nPeer)
 	// Your initialization code here (2A, 2B, 2C).
 	rf.refreshFS()
-	rf.isAlive()
-
+	go rf.isAlive()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
