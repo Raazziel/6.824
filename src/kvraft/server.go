@@ -3,13 +3,14 @@ package kvraft
 import (
 	"../labgob"
 	"../labrpc"
-	"log"
 	"../raft"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -18,15 +19,23 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+const (
+	put = "Put"
+	apd = "Append"
+	get = "Get"
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Cmd   string
+	Key   string
+	Value string
 }
 
 type KVServer struct {
-	mu      sync.Mutex
+	raft.DLock
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
@@ -35,15 +44,70 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-}
+	internalDB map[string]string
+	index      int
+	waited     map[Op]chan struct{}
+	mu         sync.Mutex
 
+	reqIndex   map[int]int32
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	//kv.Lock("get")
+	//defer kv.Unlock()
+	if _, ok := kv.rf.GetState(); !ok {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	v, ok := kv.internalDB[args.Key]
+	if !ok {
+		*reply = GetReply{
+			Err:   ErrNoKey,
+			Value: "",
+		}
+	} else {
+		*reply = GetReply{
+			Err:   OK,
+			Value: v,
+		}
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	reply.Err = OK
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		DPrintf("%d refuse:not leader", kv.me)
+		reply.Err = ErrWrongLeader
+		return
+	}
+	v,ok:=kv.reqIndex[args.From]
+	if !ok{
+		kv.reqIndex[args.From]=args.CmdIndex
+	}else {
+		if args.CmdIndex<=v{
+			DPrintf("duplicated request...")
+			return
+		}
+	}
+
+	//client是同步发送的,所以request index应该是连续的....
+
+	kv.reqIndex[args.From]=args.CmdIndex
+	DPrintf("%d accept", kv.me)
+	op := Op{args.Op, args.Key, args.Value}
+	kv.mu.Lock()
+	kv.waited[op] = make(chan struct{})
+	kv.mu.Unlock()
+	kv.rf.Start(op)
+	select {
+	case <-kv.waited[op]:
+		DPrintf("put rpc done,%+v", args)
+		return
+	case <-time.After(2 * time.Second):
+		panic("wait too long")
+	}
 }
 
 //
@@ -89,10 +153,41 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-
+	kv.internalDB = make(map[string]string)
+	kv.waited = make(map[Op]chan struct{})
+	kv.reqIndex=make(map[int]int32)
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
+	go func() {
+		for msg := range kv.applyCh {
+			kv.Lock("apply to state machine")
+			index := msg.CommandIndex
+			if index < kv.index {
+				kv.Unlock()
+				continue
+			}
+			op, ok := msg.Command.(Op)
+			if ok {
+				DPrintf("%d's old value is %s,new op is %+v", kv.me, kv.internalDB[op.Key], msg)
+				if op.Cmd == put {
+					kv.internalDB[op.Key] = op.Value
+				} else if op.Cmd == apd {
+					v, ok := kv.internalDB[op.Key]
+					if !ok {
+						kv.internalDB[op.Key] = op.Value
+					} else {
+						kv.internalDB[op.Key] = v + op.Value
+					}
+				}
+				go func() {
+					kv.waited[op] <- struct{}{}
+				}()
+				kv.index++
+			}
+			kv.Unlock()
+		}
+	}()
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.

@@ -45,7 +45,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 		rf.logs=append(rf.logs,args.Entry...)
 	}
 
-	if args.LeaderCommit>rf.commitIndex && logOk {
+	if args.LeaderCommit>rf.CommitIndex && logOk {
 		if newIndex:=len(rf.logs)-1;args.LeaderCommit>newIndex{
 			rf.changeCommitIndex(newIndex)
 		}else{
@@ -83,7 +83,7 @@ func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 			prevIndex:=rf.ls.nextIndex[to]-1
 			prevTerm:=rf.logs[prevIndex].Term
 			logs:=rf.logs[prevIndex+1:]
-			args := &AppendEntryArgs{rf.term, rf.me,prevIndex,prevTerm,logs,rf.commitIndex}
+			args := &AppendEntryArgs{rf.term, rf.me,prevIndex,prevTerm,logs,rf.CommitIndex}
 			rf.Unlock()
 			reply := &AppendEntryReply{}
 			ok := rf.peers[to].Call("Raft.AppendEntry", args, reply)
@@ -129,7 +129,7 @@ func (rf *Raft) doAppendEntry() {
 }
 //需要由caller加锁..
 func (rf *Raft)eternalChecker(){
-	for i:=len(rf.logs)-1;i>rf.lastApplied;i--{
+	for i:=len(rf.logs)-1;i>rf.LastApplied;i--{
 		// 对于不是当前term的log需要藉由其他log间接提交
 		if rf.logs[i].Term!=rf.term{
 			DPrintf("%d:%d has log %d created in previous term \n",rf.me,rf.term,i)
@@ -143,16 +143,17 @@ func (rf *Raft)eternalChecker(){
 			if rf.ls.matchIndex[j]>=i {
 				votes++
 				if rf.hasMajority(votes){
-					DPrintf("great leader %d:%d commit log from %d to %d \n",rf.me,rf.term,rf.lastApplied+1,i)
-					for k:=rf.lastApplied +1;k<=i;k++{
+					DPrintf("great leader %d:%d commit log from %d to %d \n",rf.me,rf.term,rf.LastApplied+1,i)
+					for k:=rf.LastApplied +1;k<=i;k++{
 						rf.ac<-ApplyMsg{
 							CommandValid: true,
 							Command:      rf.logs[k].Command,
 							CommandIndex: k,
 						}
 					}
-					rf.commitIndex =i
-					rf.lastApplied =i
+					time.Sleep(time.Duration(10)*time.Millisecond)
+					rf.CommitIndex =i
+					rf.LastApplied =i
 					return
 				}
 			}
@@ -161,7 +162,7 @@ func (rf *Raft)eternalChecker(){
 }
 
 func (rf *Raft)changeCommitIndex(to int){
-	for i:=rf.commitIndex;i<=to;i++{
+	for i:=rf.CommitIndex;i<=to;i++{
 		rf.ac<-ApplyMsg{
 			CommandValid: true,
 			Command:      rf.logs[i].Command,
@@ -169,6 +170,7 @@ func (rf *Raft)changeCommitIndex(to int){
 		}
 		DPrintf("%d:%d apply log,%d:%d",rf.me,rf.term,rf.logs[i].Command,i)
 	}
-	rf.commitIndex =to
-	rf.lastApplied =to
+	time.Sleep(time.Millisecond*time.Duration(10))
+	rf.CommitIndex =to
+	rf.LastApplied =to
 }

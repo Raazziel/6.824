@@ -1,5 +1,6 @@
 package raft
-
+// 重构 重构 还是重构!!!
+// 屎一样的raft代码和raft味的屎
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -90,6 +91,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	ac		  chan ApplyMsg
+	InKV		bool
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -98,8 +100,8 @@ type Raft struct {
 	term        int
 	role        int
 	logs        []Log
-	commitIndex int
-	lastApplied int
+	CommitIndex int
+	LastApplied int
 
 
 	fs followerstatus
@@ -410,8 +412,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.nPeer = len(rf.peers)
 	rf.term = 0
-	rf.commitIndex =0
-	rf.lastApplied =0
+	rf.CommitIndex =0
+	rf.LastApplied =0
 	rf.ac=applyCh
 	rf.logs=[]Log{{
 		0,
