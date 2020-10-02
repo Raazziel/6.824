@@ -2,8 +2,8 @@ package kvraft
 
 import (
 	"../labrpc"
-	"sync/atomic"
 	rr "math/rand"
+	"sync/atomic"
 )
 import "crypto/rand"
 import "math/big"
@@ -29,7 +29,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.nServers = len(servers)
-	ck.who=rr.Int()
+	ck.who = rr.Int()
 	return ck
 }
 
@@ -47,6 +47,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
+	DPrintf("%d,get call,%s",ck.who,key)
 	args := GetArgs{Key: key}
 	reply := GetReply{}
 	//for i:=0;i<ck.nServers;i++{
@@ -64,22 +65,21 @@ func (ck *Clerk) Get(key string) string {
 	//	}
 	//}
 	//return ""
-	leaderIndex := 0
-
+	done:=false
+	val:=""
 	for {
-		for {
-			if ok := ck.servers[leaderIndex].Call("KVServer.Get", &args, &reply); !ok {
-				continue
-			}
+		for i:=0;i<ck.nServers;i++{
+			DPrintf("get call start")
+			ck.servers[i].Call("KVServer.Get", &args, &reply)
 			if reply.Err == OK {
-				DPrintf("put call done")
-				return reply.Value
-			} else if reply.Err == ErrNoKey {
-				return ""
+				val=reply.Value
+				DPrintf("get call done")
+				done=true
 			}
-			break
 		}
-		leaderIndex = (leaderIndex + 1) % ck.nServers
+		if done{
+			return val
+		}
 	}
 }
 
@@ -95,29 +95,32 @@ func (ck *Clerk) Get(key string) string {
 //
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	index:=atomic.AddInt32(&ck.cmdIndex,1)
+	DPrintf("%d,put call,%s,%s",ck.who,key,value)
+	index := atomic.AddInt32(&ck.cmdIndex, 1)
 	// You will have to modify this function.
-	args := PutAppendArgs{key, value, op,index,ck.who}
+	args := PutAppendArgs{key, value, op, index, ck.who}
 	reply := PutAppendReply{}
-	leaderIndex := 0
+	done:=false
 	for {
-		for {
-			if ok := ck.servers[leaderIndex].Call("KVServer.PutAppend", &args, &reply); !ok {
-				continue
-			}
+		for i:=0;i<ck.nServers;i++{
+			DPrintf("put call start")
+			ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
 			if reply.Err == OK {
 				DPrintf("put call done")
-				return
+				done=true
 			}
-			break
 		}
-		leaderIndex = (leaderIndex + 1) % ck.nServers
+		if done{
+			return
+		}
 	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
+	DPrintf("put call %s %s", key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+	DPrintf("apd call %s %s", key, value)
 	ck.PutAppend(key, value, "Append")
 }

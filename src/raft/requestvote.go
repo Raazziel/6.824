@@ -136,7 +136,7 @@ func (rf *Raft) doRequestVote() {
 			rf.Unlock()
 			go rf.doRequestVote()
 			return
-		case <-rf.cs.done:
+		case <-rf.Cs.done:
 			return
 		}
 	}

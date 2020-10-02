@@ -7,7 +7,6 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const Debug = 1
@@ -32,6 +31,8 @@ type Op struct {
 	Cmd   string
 	Key   string
 	Value string
+	From  int
+	CmdIndex int32
 }
 
 type KVServer struct {
@@ -49,14 +50,17 @@ type KVServer struct {
 	waited     map[Op]chan struct{}
 	mu         sync.Mutex
 
-	reqIndex   map[int]int32
+	reqIndex map[int]int32
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	//kv.Lock("get")
 	//defer kv.Unlock()
-	if _, ok := kv.rf.GetState(); !ok {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	defer DPrintf("%d,get return:%+v",kv.me,reply)
+	if _, leader := kv.rf.GetState(); !leader {
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -76,37 +80,42 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.mu.Lock()
 	reply.Err = OK
 	if _, isLeader := kv.rf.GetState(); !isLeader {
 		DPrintf("%d refuse:not leader", kv.me)
 		reply.Err = ErrWrongLeader
+		kv.mu.Unlock()
 		return
 	}
-	v,ok:=kv.reqIndex[args.From]
-	if !ok{
-		kv.reqIndex[args.From]=args.CmdIndex
-	}else {
-		if args.CmdIndex<=v{
-			DPrintf("duplicated request...")
-			return
-		}
+	DPrintf("might deadlock")
+
+	v, ok := kv.reqIndex[args.From]
+	if ok&&v>=args.CmdIndex {
+		DPrintf("duplicated request...")
+		kv.mu.Unlock()
+		return
 	}
+
 
 	//client是同步发送的,所以request index应该是连续的....
 
-	kv.reqIndex[args.From]=args.CmdIndex
 	DPrintf("%d accept", kv.me)
-	op := Op{args.Op, args.Key, args.Value}
-	kv.mu.Lock()
-	kv.waited[op] = make(chan struct{})
-	kv.mu.Unlock()
+	op := Op{args.Op, args.Key, args.Value,args.From,args.CmdIndex}
+	if	_,ok:=kv.waited[op];!ok{
+		kv.waited[op] = make(chan struct{})
+	}
 	kv.rf.Start(op)
 	select {
 	case <-kv.waited[op]:
 		DPrintf("put rpc done,%+v", args)
+		kv.mu.Unlock()
 		return
-	case <-time.After(2 * time.Second):
-		panic("wait too long")
+	case <-kv.rf.Ls.Done:
+		DPrintf("put time out...")
+		kv.mu.Unlock()
+		reply.Err=ErrTimeout
+		return
 	}
 }
 
@@ -155,7 +164,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 	kv.internalDB = make(map[string]string)
 	kv.waited = make(map[Op]chan struct{})
-	kv.reqIndex=make(map[int]int32)
+	kv.reqIndex = make(map[int]int32)
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
@@ -170,16 +179,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			op, ok := msg.Command.(Op)
 			if ok {
 				DPrintf("%d's old value is %s,new op is %+v", kv.me, kv.internalDB[op.Key], msg)
-				if op.Cmd == put {
-					kv.internalDB[op.Key] = op.Value
-				} else if op.Cmd == apd {
-					v, ok := kv.internalDB[op.Key]
-					if !ok {
-						kv.internalDB[op.Key] = op.Value
-					} else {
-						kv.internalDB[op.Key] = v + op.Value
-					}
-				}
+				kv.applyMSG(op)
 				go func() {
 					kv.waited[op] <- struct{}{}
 				}()
@@ -193,4 +193,24 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// You may need initialization code here.
 
 	return kv
+}
+func (kv *KVServer)applyMSG(op Op){
+	v,ok:=kv.reqIndex[op.From]
+	if !ok{
+		kv.reqIndex[op.From]=op.CmdIndex
+	}else if v>=op.CmdIndex {
+		return
+	}
+	kv.reqIndex[op.From]=op.CmdIndex
+	if op.Cmd == put {
+		kv.internalDB[op.Key] = op.Value
+	} else if op.Cmd == apd {
+		v, ok := kv.internalDB[op.Key]
+		if !ok {
+			kv.internalDB[op.Key] = op.Value
+		} else {
+			kv.internalDB[op.Key] = v + op.Value
+		}
+	}
+
 }

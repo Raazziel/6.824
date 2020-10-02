@@ -72,7 +72,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 	for {
 		select {
-		case <-rf.ls.done:
+		case <-rf.Ls.Done:
 			return
 		default:
 			rf.Lock("ase lock1")
@@ -80,7 +80,7 @@ func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 				rf.Unlock()
 				return
 			}
-			prevIndex:=rf.ls.nextIndex[to]-1
+			prevIndex:=rf.Ls.nextIndex[to]-1
 			prevTerm:=rf.logs[prevIndex].Term
 			logs:=rf.logs[prevIndex+1:]
 			args := &AppendEntryArgs{rf.term, rf.me,prevIndex,prevTerm,logs,rf.CommitIndex}
@@ -102,13 +102,13 @@ func (rf *Raft) appendSingleEntry(to int, res chan bool) {
 					return
 				}
 				if reply.Success {
-					rf.ls.nextIndex[to]=prevIndex+len(logs)+1
-					rf.ls.matchIndex[to]=prevIndex+len(logs)
+					rf.Ls.nextIndex[to]=prevIndex+len(logs)+1
+					rf.Ls.matchIndex[to]=prevIndex+len(logs)
 					rf.eternalChecker()
 					rf.Unlock()
 					return
 				}else{
-					rf.ls.nextIndex[to]--
+					rf.Ls.nextIndex[to]--
 					rf.Unlock()
 					continue
 				}
@@ -140,7 +140,7 @@ func (rf *Raft)eternalChecker(){
 			if j==rf.me{
 				continue
 			}
-			if rf.ls.matchIndex[j]>=i {
+			if rf.Ls.matchIndex[j]>=i {
 				votes++
 				if rf.hasMajority(votes){
 					DPrintf("great leader %d:%d commit log from %d to %d \n",rf.me,rf.term,rf.LastApplied+1,i)

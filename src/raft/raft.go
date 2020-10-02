@@ -55,7 +55,7 @@ type candidatestatus struct {
 type leaderstatus struct {
 	nextIndex  []int
 	matchIndex []int
-	done       chan struct{}
+	Done       chan struct{}
 }
 //为了弥补我的愚行而使用的dirty hack
 var firstLeader bool=true
@@ -105,8 +105,8 @@ type Raft struct {
 
 
 	fs followerstatus
-	cs candidatestatus
-	ls leaderstatus
+	Cs candidatestatus
+	Ls leaderstatus
 }
 
 func (rf *Raft) refreshFS() {
@@ -116,7 +116,7 @@ func (rf *Raft) refreshFS() {
 }
 
 func (rf *Raft) refreshCS() {
-	rf.cs.done = make(chan struct{})
+	rf.Cs.done = make(chan struct{})
 }
 
 func (rf *Raft) refreshLS() {
@@ -128,11 +128,11 @@ func (rf *Raft) refreshLS() {
 		}
 		firstLeader=false
 	}
-	rf.ls.done = make(chan struct{})
+	rf.Ls.Done = make(chan struct{})
 	ii:=len(rf.logs)
 	for i:=0;i<rf.nPeer;i++{
-		rf.ls.nextIndex[i]=ii
-		rf.ls.matchIndex[i]=0
+		rf.Ls.nextIndex[i]=ii
+		rf.Ls.matchIndex[i]=0
 	}
 }
 
@@ -149,9 +149,9 @@ func (rf *Raft) changeRole(to int) {
 	if rf.role == follower {
 		close(rf.fs.done)
 	} else if rf.role == candidate {
-		close(rf.cs.done)
+		close(rf.Cs.done)
 	} else {
-		close(rf.ls.done)
+		close(rf.Ls.Done)
 	}
 
 	rf.role = to
@@ -298,7 +298,7 @@ func (rf *Raft) keepAlive() {
 		select {
 		case <-time.After(time.Duration(HBInterval) * time.Millisecond):
 			rf.doAppendEntry()
-		case <-rf.ls.done:
+		case <-rf.Ls.Done:
 			return
 		}
 	}
@@ -382,9 +382,9 @@ func (rf *Raft) Kill() {
 	case follower:
 		close(rf.fs.done)
 	case candidate:
-		close(rf.cs.done)
+		close(rf.Cs.done)
 	case leader:
-		close(rf.ls.done)
+		close(rf.Ls.Done)
 	}
 }
 
@@ -419,8 +419,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		0,
 		0,
 	}}
-	rf.ls.nextIndex=make([]int,rf.nPeer)
-	rf.ls.matchIndex=make([]int,rf.nPeer)
+	rf.Ls.nextIndex=make([]int,rf.nPeer)
+	rf.Ls.matchIndex=make([]int,rf.nPeer)
 	// Your initialization code here (2A, 2B, 2C).
 	rf.refreshFS()
 	go rf.isAlive()
