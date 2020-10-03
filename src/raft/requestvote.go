@@ -7,10 +7,10 @@ import (
 
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term int
-	From int
+	Term         int
+	From         int
 	LastLogIndex int
-	LastLogTerm	 int
+	LastLogTerm  int
 }
 
 //
@@ -26,21 +26,25 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.Lock("rv lock")
-	defer rf.Unlock()
-	defer DPrintf("%d:%d is asked voting for %+v,%+v", rf.me, rf.term, args, reply)
-	*reply = RequestVoteReply{
-		Term:    rf.term,
-		Granted: false,
-	}
+	defer func() {
+		if reply.Granted {
+			rf.fs.updatedWithHB = true
+		}
+		reply.Term = rf.term
+		DPrintf("%d:%d is asked voting for %+v,%+v", rf.me, rf.term, args, reply)
+		rf.persist()
+		rf.Unlock()
+	}()
 
-	logOK:=true
-	index,term:=rf.getLastIndexTerm()
-	if term>args.LastLogTerm{
-		logOK=false
-	}else if term==args.LastLogTerm&&index>args.LastLogIndex{
-		logOK=false
-	}
+	reply.Granted = false
 
+	logOK := true
+	index, term := rf.getLastIndexTerm()
+	if term > args.LastLogTerm {
+		logOK = false
+	} else if term == args.LastLogTerm && index > args.LastLogIndex {
+		logOK = false
+	}
 
 	if args.Term < rf.term {
 		return
@@ -49,21 +53,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			if rf.fs.votedTo != -1 && rf.fs.votedTo != args.From {
 				return
 			}
-			if !logOK{
+			if !logOK {
 				return
 			}
 			rf.fs.votedTo = args.From
-			rf.fs.updatedWithHB = true
 			reply.Granted = true
 		}
 		return
 	} else {
-		DPrintf("%d:%d increase Term with %d:%d\n", rf.me, rf.term, args.From, args.Term)
-		rf.term = args.Term
-		rf.persist()
-		reply.Term = rf.term
-		rf.changeRole(follower)
-		if !logOK{
+		rf.withBiggerTerm(args.Term, args)
+		if !logOK {
 			return
 		}
 		rf.fs.votedTo = args.From
@@ -72,15 +71,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 }
 
-
-
 func (rf *Raft) requestSingleVote(to int, res chan bool) {
 	rf.Lock("rsv lock")
-	index,term:=rf.getLastIndexTerm()
-	args := &RequestVoteArgs{rf.term, rf.me,index,term}
-	rf.Unlock()
+	index, term := rf.getLastIndexTerm()
+	args := &RequestVoteArgs{rf.term, rf.me, index, term}
 	reply := &RequestVoteReply{}
+	rf.Unlock()
 	for {
+		if rf.killed() {
+			return
+		}
 		ok := rf.peers[to].Call("Raft.RequestVote", args, reply)
 		if ok {
 			//case1 成功获得vote
@@ -90,15 +90,10 @@ func (rf *Raft) requestSingleVote(to int, res chan bool) {
 			//case2 对方term更大
 			rf.Lock("rsv middle lock")
 			if reply.Term > rf.term {
-				DPrintf("%d:%d increase Term with %d:%d\n", rf.me, rf.term, args.From, reply.Term)
-				rf.term = reply.Term
+				rf.withBiggerTerm(reply.Term, reply)
 				rf.persist()
-				rf.changeRole(follower)
 			}
 			rf.Unlock()
-			return
-		}
-		if rf.killed(){
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -107,17 +102,17 @@ func (rf *Raft) requestSingleVote(to int, res chan bool) {
 
 func (rf *Raft) doRequestVote() {
 	votes := 0
-	res := make(chan bool)
+	c := make(chan bool)
 	for i := 0; i < rf.nPeer; i++ {
 		if i == rf.me {
 			continue
 		}
-		go rf.requestSingleVote(i, res)
+		go rf.requestSingleVote(i, c)
 	}
 	for {
-		interval:=ElectionTimeout+rand.Intn(ElectionTimeout)
+		interval := ElectionTimeout + rand.Intn(ElectionTimeout)
 		select {
-		case <-res:
+		case <-c:
 			votes++
 			if rf.hasMajority(votes) {
 				rf.Lock("become leader lock")
@@ -127,8 +122,6 @@ func (rf *Raft) doRequestVote() {
 				return
 			}
 		case <-time.After(time.Duration(interval) * time.Millisecond):
-			//TODO:重构用atomic实现...
-			DPrintf("%d retry vote after %d ms",rf.me,interval)
 			rf.Lock("Term++ lock")
 			rf.term++
 			rf.persist()
@@ -137,6 +130,7 @@ func (rf *Raft) doRequestVote() {
 			go rf.doRequestVote()
 			return
 		case <-rf.Cs.done:
+			//这里channel内存泄漏
 			return
 		}
 	}

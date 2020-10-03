@@ -64,8 +64,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	v, ok := kv.internalDB[args.Key]
-	if !ok {
+	v, existed := kv.internalDB[args.Key]
+	if !existed {
 		*reply = GetReply{
 			Err:   ErrNoKey,
 			Value: "",
@@ -83,7 +83,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	reply.Err = OK
 	if _, isLeader := kv.rf.GetState(); !isLeader {
-		DPrintf("%d refuse:not leader", kv.me)
+		//DPrintf("%d refuse:not leader", kv.me)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
@@ -92,7 +92,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	v, ok := kv.reqIndex[args.From]
 	if ok&&v>=args.CmdIndex {
-		DPrintf("duplicated request...")
+		//DPrintf("duplicated request...")
 		kv.mu.Unlock()
 		return
 	}

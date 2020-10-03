@@ -1,4 +1,5 @@
 package raft
+
 // 重构 重构 还是重构!!!
 // 屎一样的raft代码和raft味的屎
 //
@@ -19,14 +20,14 @@ package raft
 //
 
 import (
+	"../labgob"
+	"../labrpc"
 	"bytes"
 	"math/rand"
-	"time"
+	"sync"
 	"sync/atomic"
-	"../labrpc"
-	"../labgob"
+	"time"
 )
-
 
 // import "bytes"
 // import "../labgob"
@@ -37,7 +38,7 @@ const (
 	leader
 )
 const (
-	HBInterval      = 100
+	HBInterval      = 50
 	HBTimeout       = 150
 	ElectionTimeout = 300
 )
@@ -57,8 +58,9 @@ type leaderstatus struct {
 	matchIndex []int
 	Done       chan struct{}
 }
-//为了弥补我的愚行而使用的dirty hack
-var firstLeader bool=true
+
+var firstLog sync.Once
+
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -90,8 +92,7 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-	ac		  chan ApplyMsg
-	InKV		bool
+	ac        chan ApplyMsg
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -102,7 +103,6 @@ type Raft struct {
 	logs        []Log
 	CommitIndex int
 	LastApplied int
-
 
 	fs followerstatus
 	Cs candidatestatus
@@ -120,26 +120,27 @@ func (rf *Raft) refreshCS() {
 }
 
 func (rf *Raft) refreshLS() {
-	if firstLeader{
-		rf.ac<-ApplyMsg{
+	firstLog.Do(func() {
+		rf.ac <- ApplyMsg{
 			CommandValid: true,
 			Command:      0,
 			CommandIndex: 0,
 		}
-		firstLeader=false
-	}
+		rf.persist()
+		DPrintf("first commit")
+	})
 	rf.Ls.Done = make(chan struct{})
-	ii:=len(rf.logs)
-	for i:=0;i<rf.nPeer;i++{
-		rf.Ls.nextIndex[i]=ii
-		rf.Ls.matchIndex[i]=0
+	nLog := len(rf.logs)
+	for i := 0; i < rf.nPeer; i++ {
+		rf.Ls.nextIndex[i] = nLog
+		rf.Ls.matchIndex[i] = 0
 	}
 }
 
 // 应该由caller上锁...
-func (rf *Raft)getLastIndexTerm()(index,term int){
-	index=len(rf.logs)-1
-	term=rf.logs[index].Term
+func (rf *Raft) getLastIndexTerm() (index, term int) {
+	index = len(rf.logs) - 1
+	term = rf.logs[index].Term
 	return
 }
 
@@ -168,7 +169,6 @@ func (rf *Raft) changeRole(to int) {
 	}
 }
 
-//需要外部加锁使用...
 func (rf *Raft) hasMajority(nr int) bool {
 	return nr+1 > rf.nPeer/2
 }
@@ -197,35 +197,20 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 
-	w:=new(bytes.Buffer)
-	e:=labgob.NewEncoder(w)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
 	e.Encode(rf.term)
+	e.Encode(rf.fs.votedTo)
 	e.Encode(len(rf.logs))
 	e.Encode(rf.logs)
-	data:=w.Bytes()
+	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
-func virtualP(data []byte){
-	if len(data)<1||data==nil{
-		return
-	}
-	r:=bytes.NewBuffer(data)
-	d:=labgob.NewDecoder(r)
-	term:=0
-	e:=d.Decode(&term)
-	if e!=nil{
-		panic(e.Error())
-	}
-	lenLogs:=0
-	d.Decode(&lenLogs)
-	logs:=make([]Log,lenLogs)
-	e=d.Decode(&logs)
-	DPrintf("decode result:%d,%d,%+v\n",term,lenLogs,logs)
-}
+
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
@@ -245,52 +230,23 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 	rf.Lock("readPersist")
 	defer rf.Unlock()
-	r:=bytes.NewBuffer(data)
-	d:=labgob.NewDecoder(r)
-	term:=0
-	e:=d.Decode(&term)
-	if e!=nil{
-		panic(e.Error())
-	}
-	lenLogs:=0
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	term, voted, lenLogs := 0, 0, 0
+	d.Decode(&term)
+	d.Decode(&voted)
 	d.Decode(&lenLogs)
-	logs:=make([]Log,lenLogs)
-	e=d.Decode(&logs)
-	rf.term=term
-	rf.logs=logs[:]
-	DPrintf("readpersist:decode term:%d logs size :%d,%+v\n",term,lenLogs,logs)
-	if e!=nil{
+	logs := make([]Log, lenLogs)
+	e := d.Decode(&logs)
+	if e != nil {
 		panic(e.Error())
 	}
+	rf.term = term
+	rf.logs = logs[:]
+	rf.fs.votedTo = voted
+	DPrintf("readpersist:decode term:%d logs size :%d,%+v\n", term, lenLogs, logs)
+
 }
-func printP(data []byte){
-	r:=bytes.NewBuffer(data)
-	d:=labgob.NewDecoder(r)
-	term:=0
-	e:=d.Decode(&term)
-	if e!=nil{
-		panic(e.Error())
-	}
-	lenLogs:=0
-	d.Decode(&lenLogs)
-	logs:=make([]Log,lenLogs)
-	e=d.Decode(&logs)
-	DPrintf("printP:decode logs size :%d,%+v\n",len(logs),logs)
-}
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-
-
-
-
-//
-// example RequestVote RPC handler.
-//
-
-
-
 
 func (rf *Raft) keepAlive() {
 	rf.doAppendEntry()
@@ -306,8 +262,8 @@ func (rf *Raft) keepAlive() {
 
 func (rf *Raft) isAlive() {
 	for {
-		interval:=HBTimeout+rand.Intn(61)
-		t:=time.After(time.Duration(interval) * time.Millisecond)
+		interval := HBTimeout + rand.Intn(61)
+		t := time.After(time.Duration(interval) * time.Millisecond)
 		select {
 		case <-t:
 			rf.Lock("is alive")
@@ -347,15 +303,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	defer rf.Unlock()
 	index := len(rf.logs)
 	term := rf.term
-	isLeader := rf.role==leader
+	isLeader := rf.role == leader
 
 	// Your code here (2B).
-	if isLeader{
-		rf.logs=append(rf.logs,Log{
+	if isLeader {
+		rf.logs = append(rf.logs, Log{
 			Term:    term,
 			Command: command,
 		})
-		DPrintf("%d:%d update log to %d,%+v\n",rf.me,term,len(rf.logs),command)
+		DPrintf("%d:%d update log to %d,%+v\n", rf.me, term, len(rf.logs), command)
 		rf.persist()
 	}
 	return index, term, isLeader
@@ -411,16 +367,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.nPeer = len(rf.peers)
-	rf.term = 0
-	rf.CommitIndex =0
-	rf.LastApplied =0
-	rf.ac=applyCh
-	rf.logs=[]Log{{
+	rf.ac = applyCh
+	rf.logs = []Log{{
 		0,
 		0,
 	}}
-	rf.Ls.nextIndex=make([]int,rf.nPeer)
-	rf.Ls.matchIndex=make([]int,rf.nPeer)
+	rf.Ls.nextIndex = make([]int, rf.nPeer)
+	rf.Ls.matchIndex = make([]int, rf.nPeer)
 	// Your initialization code here (2A, 2B, 2C).
 	rf.refreshFS()
 	go rf.isAlive()

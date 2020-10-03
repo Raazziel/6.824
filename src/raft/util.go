@@ -25,12 +25,12 @@ type DLock struct {
 
 func (m *DLock) Lock(desc string) {
 	m.mu.Lock()
-	if Debug>0{
+	if Debug > 0 {
 		r := atomic.AddInt32(&m.lid, 2)
 		go func() {
 			time.Sleep(time.Duration(100) * time.Millisecond)
 			if atomic.LoadInt32(&m.lid) == r {
-				fmt.Println("deadlock detected", desc,"+",m.lid)
+				fmt.Println("deadlock detected", desc, "+", m.lid)
 			}
 		}()
 	}

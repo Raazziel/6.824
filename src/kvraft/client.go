@@ -24,6 +24,7 @@ func nrand() int64 {
 	return x
 }
 
+//append不是幂等的,要避免重复的rpc
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers

@@ -194,8 +194,8 @@ func (cfg *config) start1(i int) {
 			}
 
 			if err_msg != "" {
-				for i:=0;i<cfg.n;i++{
-					fmt.Printf("%v\n",cfg.logs[i])
+				for i := 0; i < cfg.n; i++ {
+					fmt.Printf("%v\n", cfg.logs[i])
 				}
 				log.Fatalf("apply error: %v\n", err_msg)
 				cfg.applyErr[i] = err_msg
@@ -464,7 +464,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 					// committed
 					if cmd1 == cmd {
 						// and it was the Command we submitted.
-						DPrintf("success and used time:%dms\n",time.Since(t0).Milliseconds())
+						DPrintf("success and used time:%dms\n", time.Since(t0).Milliseconds())
 						return index
 					}
 				}
@@ -477,7 +477,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	DPrintf("fail and used time:%dms\n",time.Since(t0).Milliseconds())
+	DPrintf("fail and used time:%dms\n", time.Since(t0).Milliseconds())
 	cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	return -1
 }
