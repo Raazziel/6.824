@@ -4,9 +4,12 @@ import (
 	"../labrpc"
 	rr "math/rand"
 	"sync/atomic"
+	"time"
+	"crypto/rand"
+	"math/big"
+	"../raft"
 )
-import "crypto/rand"
-import "math/big"
+
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -48,39 +51,27 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 //
 func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
-	DPrintf("%d,get call,%s",ck.who,key)
+	DPrintf("%d,get call,%s", ck.who, key)
 	args := GetArgs{Key: key}
 	reply := GetReply{}
-	//for i:=0;i<ck.nServers;i++{
-	//	for{
-	//		if ok:=ck.servers[i].Call("KVServer.Get", &args, &reply);!ok{
-	//			continue
-	//		}
-	//		if reply.Err==OK {
-	//			DPrintf("put call done")
-	//			return reply.Value
-	//		}else if reply.Err==ErrNoKey{
-	//			return ""
-	//		}
-	//		break
-	//	}
-	//}
-	//return ""
-	done:=false
-	val:=""
 	for {
-		for i:=0;i<ck.nServers;i++{
+		for i := 0; i < ck.nServers; i++ {
 			DPrintf("get call start")
-			ck.servers[i].Call("KVServer.Get", &args, &reply)
-			if reply.Err == OK {
-				val=reply.Value
-				DPrintf("get call done")
-				done=true
+			c := make(chan string)
+			go func() {
+				ck.servers[i].Call("KVServer.Get", &args, &reply)
+				if reply.Err == OK {
+					c <- reply.Value
+				}
+			}()
+			select {
+			case val := <-c:
+				return val
+			case <-time.After(100 * time.Millisecond):
+				continue
 			}
 		}
-		if done{
-			return val
-		}
+
 	}
 }
 
@@ -96,22 +87,23 @@ func (ck *Clerk) Get(key string) string {
 //
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	DPrintf("%d,put call,%s,%s",ck.who,key,value)
+	DPrintf("%d,put call,%s,%s", ck.who, key, value)
 	index := atomic.AddInt32(&ck.cmdIndex, 1)
-	// You will have to modify this function.
 	args := PutAppendArgs{key, value, op, index, ck.who}
 	reply := PutAppendReply{}
-	done:=false
+	done := false
 	for {
-		for i:=0;i<ck.nServers;i++{
+		for i := 0; i < ck.nServers; i++ {
 			DPrintf("put call start")
 			ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
 			if reply.Err == OK {
 				DPrintf("put call done")
-				done=true
+				done = true
 			}
 		}
-		if done{
+		if done {
+			// 等待leader把commitindex同步到follower...
+			time.Sleep(raft.HBInterval*time.Millisecond)
 			return
 		}
 	}

@@ -103,6 +103,8 @@ type Raft struct {
 	logs        []Log
 	CommitIndex int
 	LastApplied int
+	round       int32
+	PrevLog     bool
 
 	fs followerstatus
 	Cs candidatestatus
@@ -120,15 +122,6 @@ func (rf *Raft) refreshCS() {
 }
 
 func (rf *Raft) refreshLS() {
-	firstLog.Do(func() {
-		rf.ac <- ApplyMsg{
-			CommandValid: true,
-			Command:      0,
-			CommandIndex: 0,
-		}
-		rf.persist()
-		DPrintf("first commit")
-	})
 	rf.Ls.Done = make(chan struct{})
 	nLog := len(rf.logs)
 	for i := 0; i < rf.nPeer; i++ {
@@ -147,6 +140,9 @@ func (rf *Raft) getLastIndexTerm() (index, term int) {
 // 应该由caller上锁...
 func (rf *Raft) changeRole(to int) {
 
+	if rf.role==to{
+		return
+	}
 	if rf.role == follower {
 		close(rf.fs.done)
 	} else if rf.role == candidate {
@@ -166,6 +162,9 @@ func (rf *Raft) changeRole(to int) {
 	} else if to == leader {
 		rf.refreshLS()
 		go rf.keepAlive()
+
+
+		//rf.Start(struct {}{})
 	}
 }
 
@@ -270,8 +269,8 @@ func (rf *Raft) isAlive() {
 			if !rf.fs.updatedWithHB {
 				DPrintf("%d:%d becomes candidate\n", rf.me, rf.term)
 				rf.term++
-				rf.persist()
 				rf.changeRole(candidate)
+				rf.persist()
 				rf.Unlock()
 				return
 			}
@@ -375,6 +374,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.Ls.nextIndex = make([]int, rf.nPeer)
 	rf.Ls.matchIndex = make([]int, rf.nPeer)
 	// Your initialization code here (2A, 2B, 2C).
+	rf.commitLog(0)
 	rf.refreshFS()
 	go rf.isAlive()
 	// initialize from state persisted before a crash

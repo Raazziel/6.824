@@ -570,7 +570,7 @@ func TestOnePartition3A(t *testing.T) {
 
 	cfg.end()
 }
-
+//failed
 func TestManyPartitionsOneClient3A(t *testing.T) {
 	// Test: partitions, one client (3A) ...
 	GenericTest(t, "3A", 1, false, false, true, -1)

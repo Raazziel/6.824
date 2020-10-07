@@ -62,12 +62,12 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply) {
 
 			if shouldConcat {
 				rf.logs = rf.logs[:args.PrevLogIndex+1]
+				rf.logs = append(rf.logs, args.Entry...)
 			}
 
 			//if shouldConcat || len(rf.logs)-1==args.PrevLogIndex{
 			//	rf.logs = append(rf.logs, args.Entry...)
 			//}
-			rf.logs = append(rf.logs, args.Entry...)
 		}
 		reply.Success = true
 	}
@@ -150,9 +150,11 @@ func (rf *Raft) doAppendEntry() {
 
 //需要由caller加锁..
 func (rf *Raft) eternalChecker() {
+	rf.PrevLog =false
 	for i := len(rf.logs) - 1; i > rf.LastApplied; i-- {
 		// 对于不是当前term的log需要藉由其他log间接提交
 		if rf.logs[i].Term != rf.term {
+			rf.PrevLog =true
 			DPrintf("%d:%d has log %d created in previous term \n", rf.me, rf.term, i)
 			continue
 		}
