@@ -89,8 +89,8 @@ type Log struct {
 type Raft struct {
 	DLock                         // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
+	Persister *Persister          // Object to hold this peer's persisted state
+	Me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	ac        chan ApplyMsg
 
@@ -106,9 +106,12 @@ type Raft struct {
 	round       int32
 	PrevLog     bool
 
-	fs followerstatus
-	Cs candidatestatus
-	Ls leaderstatus
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Chsnapshot        chan []byte
+	fs                followerstatus
+	Cs                candidatestatus
+	Ls                leaderstatus
 }
 
 func (rf *Raft) refreshFS() {
@@ -123,9 +126,9 @@ func (rf *Raft) refreshCS() {
 
 func (rf *Raft) refreshLS() {
 	rf.Ls.Done = make(chan struct{})
-	nLog := len(rf.logs)
+	index,_:= rf.getLastIndexTerm()
 	for i := 0; i < rf.nPeer; i++ {
-		rf.Ls.nextIndex[i] = nLog
+		rf.Ls.nextIndex[i] = index+1
 		rf.Ls.matchIndex[i] = 0
 	}
 }
@@ -134,13 +137,14 @@ func (rf *Raft) refreshLS() {
 func (rf *Raft) getLastIndexTerm() (index, term int) {
 	index = len(rf.logs) - 1
 	term = rf.logs[index].Term
+	index += rf.LastIncludedIndex + 1
 	return
 }
 
 // 应该由caller上锁...
 func (rf *Raft) changeRole(to int) {
 
-	if rf.role==to{
+	if rf.role == to {
 		return
 	}
 	if rf.role == follower {
@@ -162,7 +166,6 @@ func (rf *Raft) changeRole(to int) {
 	} else if to == leader {
 		rf.refreshLS()
 		go rf.keepAlive()
-
 
 		//rf.Start(struct {}{})
 	}
@@ -194,16 +197,10 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.xxx)
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	// rf.Persister.SaveRaftState(data)
 
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.term)
-	e.Encode(rf.fs.votedTo)
-	e.Encode(len(rf.logs))
-	e.Encode(rf.logs)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	data := rf.SerializeRaftState()
+	rf.Persister.SaveRaftState(data)
 }
 
 //
@@ -214,36 +211,34 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
 	rf.Lock("readPersist")
 	defer rf.Unlock()
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	term, voted, lenLogs := 0, 0, 0
+	term, voted, lenLogs, lastIndex, lastTerm := 0, 0, 0, 0, 0
 	d.Decode(&term)
 	d.Decode(&voted)
 	d.Decode(&lenLogs)
+
 	logs := make([]Log, lenLogs)
 	e := d.Decode(&logs)
 	if e != nil {
 		panic(e.Error())
 	}
+	d.Decode(&lastIndex)
+	d.Decode(&lastTerm)
 	rf.term = term
 	rf.logs = logs[:]
 	rf.fs.votedTo = voted
-	DPrintf("readpersist:decode term:%d logs size :%d,%+v\n", term, lenLogs, logs)
+	rf.LastIncludedIndex = lastIndex
+	rf.LastIncludedTerm = lastTerm
+	rf.CommitIndex = lastIndex
+	rf.LastApplied = lastIndex
+	go func() {
+		DPrintf("%d read ", rf.Me)
+		rf.Chsnapshot <- rf.Persister.ReadSnapshot()
+	}()
+	DPrintf("%d rp:li,%d,lt,%d,lenlog,%d", rf.Me,lastIndex,lastTerm,len(logs))
 
 }
 
@@ -267,7 +262,7 @@ func (rf *Raft) isAlive() {
 		case <-t:
 			rf.Lock("is alive")
 			if !rf.fs.updatedWithHB {
-				DPrintf("%d:%d becomes candidate\n", rf.me, rf.term)
+				DPrintf("%d:%d becomes candidate\n", rf.Me, rf.term)
 				rf.term++
 				rf.changeRole(candidate)
 				rf.persist()
@@ -310,7 +305,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Term:    term,
 			Command: command,
 		})
-		DPrintf("%d:%d update log to %d,%+v\n", rf.me, term, len(rf.logs), command)
+		DPrintf("%d:%d update log to %d,%+v\n", rf.Me, term, len(rf.logs), command)
 		rf.persist()
 	}
 	return index, term, isLeader
@@ -351,8 +346,8 @@ func (rf *Raft) killed() bool {
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
+// server's port is peers[Me]. all the servers' peers[] arrays
+// have the same order. Persister is a place for this server to
 // save its persistent state, and also initially holds the most
 // recent saved state, if any. applyCh is a channel on which the
 // tester or service expects Raft to send ApplyMsg messages.
@@ -363,22 +358,56 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
+	rf.Persister = persister
+	rf.Me = me
 	rf.nPeer = len(rf.peers)
 	rf.ac = applyCh
 	rf.logs = []Log{{
 		0,
 		0,
 	}}
+	rf.CommitIndex = -1
+	rf.LastApplied = -1
+	rf.LastIncludedIndex = -1
+	rf.commitLog(0)
+
 	rf.Ls.nextIndex = make([]int, rf.nPeer)
 	rf.Ls.matchIndex = make([]int, rf.nPeer)
 	// Your initialization code here (2A, 2B, 2C).
-	rf.commitLog(0)
+
 	rf.refreshFS()
 	go rf.isAlive()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
+}
+func (rf *Raft) DoSnapshot(serverStatus []byte, op interface{}) {
+	prevTerm := 0
+	for i, log := range rf.logs {
+		if log.Command == op {
+			//DPrintf("get xx %d,len is%d,\nlog is:%+v",i,len(rf.logs),rf.logs)
+			rf.logs = rf.logs[i:]
+			//DPrintf("atfer log:%+v",rf.logs)
+			rf.installSnapshot(serverStatus, i+rf.LastIncludedIndex, prevTerm)
+			break
+		}
+		prevTerm = log.Term
+	}
+	//DPrintf("do snapshot:%+v",rf)
+}
+func (rf *Raft) ApplySnapshot(serverStatus []byte) {
+	DPrintf("dudu snapshot")
+	rf.Chsnapshot <- serverStatus
+}
+func (rf *Raft) SerializeRaftState() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.term)
+	e.Encode(rf.fs.votedTo)
+	e.Encode(len(rf.logs))
+	e.Encode(rf.logs)
+	e.Encode(rf.LastIncludedIndex)
+	e.Encode(rf.LastIncludedTerm)
+	return w.Bytes()
 }

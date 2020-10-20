@@ -2,14 +2,13 @@ package kvraft
 
 import (
 	"../labrpc"
+	"../raft"
+	"crypto/rand"
+	"math/big"
 	rr "math/rand"
 	"sync/atomic"
 	"time"
-	"crypto/rand"
-	"math/big"
-	"../raft"
 )
-
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -33,7 +32,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.nServers = len(servers)
-	ck.who = rr.Int()
+	ck.who = rr.Int() % 65536
 	return ck
 }
 
@@ -53,14 +52,15 @@ func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
 	DPrintf("%d,get call,%s", ck.who, key)
 	args := GetArgs{Key: key}
-	reply := GetReply{}
 	for {
 		for i := 0; i < ck.nServers; i++ {
 			DPrintf("get call start")
 			c := make(chan string)
 			go func() {
+				reply := GetReply{}
 				ck.servers[i].Call("KVServer.Get", &args, &reply)
-				if reply.Err == OK {
+				if reply.Err != ErrWrongLeader &&reply.Err!=""{
+					DPrintf("get call done:key,%s value,%s,err,%s",key,reply.Value,reply.Err)
 					c <- reply.Value
 				}
 			}()
@@ -103,7 +103,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		if done {
 			// 等待leader把commitindex同步到follower...
-			time.Sleep(raft.HBInterval*time.Millisecond)
+			time.Sleep(raft.HBInterval * time.Millisecond)
 			return
 		}
 	}

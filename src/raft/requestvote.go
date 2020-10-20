@@ -31,7 +31,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.fs.updatedWithHB = true
 		}
 		reply.Term = rf.term
-		DPrintf("%d:%d is asked voting for %+v,%+v", rf.me, rf.term, args, reply)
+		DPrintf("%d:%d is asked voting for %+v,%+v", rf.Me, rf.term, args, reply)
 		rf.persist()
 		rf.Unlock()
 	}()
@@ -74,7 +74,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) requestSingleVote(to int, res chan bool) {
 	rf.Lock("rsv lock")
 	index, term := rf.getLastIndexTerm()
-	args := &RequestVoteArgs{rf.term, rf.me, index, term}
+	args := &RequestVoteArgs{rf.term, rf.Me, index, term}
 	reply := &RequestVoteReply{}
 	rf.Unlock()
 	for {
@@ -104,7 +104,7 @@ func (rf *Raft) doRequestVote() {
 	votes := 0
 	c := make(chan bool)
 	for i := 0; i < rf.nPeer; i++ {
-		if i == rf.me {
+		if i == rf.Me {
 			continue
 		}
 		go rf.requestSingleVote(i, c)
@@ -116,7 +116,7 @@ func (rf *Raft) doRequestVote() {
 			votes++
 			if rf.hasMajority(votes) {
 				rf.Lock("become leader lock")
-				DPrintf("%d:%d becomes leader\n", rf.me, rf.term)
+				DPrintf("%d:%d becomes leader\n", rf.Me, rf.term)
 				rf.changeRole(leader)
 				rf.Unlock()
 				return
@@ -125,7 +125,7 @@ func (rf *Raft) doRequestVote() {
 			rf.Lock("Term++ lock")
 			rf.term++
 			rf.persist()
-			DPrintf("%d:%d election time out\n", rf.me, rf.term)
+			DPrintf("%d:%d election time out\n", rf.Me, rf.term)
 			rf.Unlock()
 			go rf.doRequestVote()
 			return

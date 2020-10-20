@@ -4,6 +4,7 @@ import (
 	"../labgob"
 	"../labrpc"
 	"../raft"
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -61,9 +62,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	if kv.rf.PrevLog{
+	if kv.rf.PrevLog {
 		kv.rf.Start(0)
-		time.Sleep(100*time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	v, existed := kv.internalDB[args.Key]
@@ -71,7 +72,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrNoKey
 	} else {
 		reply.Err = OK
-		reply.Value=v
+		reply.Value = v
 	}
 }
 
@@ -88,7 +89,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	v, existed := kv.reqIndex[args.From]
 	if existed && v >= args.CmdIndex {
-		//DPrintf("duplicated request...")
+		DPrintf("duplicated request... %+v",args)
 		return
 	}
 
@@ -161,7 +162,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 
-
 	go func() {
 		for msg := range kv.applyCh {
 			kv.Lock("apply to state machine")
@@ -169,13 +169,22 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			if ok {
 				DPrintf("%d's old value is %s,new op is %+v", kv.me, kv.internalDB[op.Key], msg)
 				kv.applyMSG(op)
-				go func() {kv.waited[op] <- struct{}{}}()
+				go func() { kv.waited[op] <- struct{}{} }()
 			}
 			kv.Unlock()
 		}
 	}()
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	c := make(chan []byte)
+	kv.rf.Chsnapshot = c
+	go func() {
+		for x := range c {
+			DPrintf("%d,apply snapshot",kv.rf.Me)
+			kv.Lock("unserialize")
+			kv.UnserializeServer(x)
+			kv.Unlock()
+		}
+	}()
 	return kv
 }
 func (kv *KVServer) applyMSG(op Op) {
@@ -186,6 +195,13 @@ func (kv *KVServer) applyMSG(op Op) {
 		return
 	}
 	kv.reqIndex[op.From] = op.CmdIndex
+
+	if kv.maxraftstate != -1 && kv.rf.Persister.RaftStateSize() > kv.maxraftstate {
+		s := kv.SerializeServer()
+		DPrintf("do snapshot:1")
+		kv.rf.DoSnapshot(s, op)
+	}
+
 	if op.Cmd == put {
 		kv.internalDB[op.Key] = op.Value
 	} else if op.Cmd == apd {
@@ -196,5 +212,20 @@ func (kv *KVServer) applyMSG(op Op) {
 			kv.internalDB[op.Key] = v + op.Value
 		}
 	}
-
+}
+func (kv *KVServer) UnserializeServer(b []byte) {
+	d := labgob.NewDecoder(bytes.NewBuffer(b))
+	d.Decode(&kv.internalDB)
+	d.Decode(kv.reqIndex)
+	DPrintf("%d start unserialze..........", kv.rf.Me)
+	for k, v := range kv.internalDB {
+		DPrintf("%s,%s", k, v)
+	}
+}
+func (kv *KVServer) SerializeServer() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.internalDB)
+	e.Encode(kv.reqIndex)
+	return w.Bytes()
 }
